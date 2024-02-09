@@ -1,4 +1,4 @@
-VERSION = "3.5.1"
+VERSION = "3.5.2"
 
 local micro = import("micro")
 local config = import("micro/config")
@@ -21,6 +21,8 @@ local current_dir = os.Getwd()
 local highest_visible_indent = 0
 -- Holds a table of paths -- objects from new_listobj() calls
 local scanlist = {}
+-- Holds the selected cursor y pos inbetween closes and opens
+local s_cursy = 2
 
 -- Get a new object used when adding to scanlist
 local function new_listobj(p, d, o, i)
@@ -289,7 +291,7 @@ local function refresh_view()
 		else
 			-- Use the basename from the full path for display
 			-- Two spaces to align with any directories, instead of being "off"
-			display_content = "  " .. get_basename(scanlist[i].abspath)
+			display_content = "➤ " .. get_basename(scanlist[i].abspath)
 		end
 
 		if scanlist[i].owner > 0 then
@@ -525,8 +527,17 @@ local function try_open_at_y(y)
 		else
 			-- If it's a file, then open it
 			micro.InfoBar():Message("Filemanager opened ", scanlist[y].abspath)
-			-- Opens the absolute path in new vertical view
-			micro.CurPane():VSplitIndex(buffer.NewBufferFromFile(scanlist[y].abspath), true)
+      -- Opens the absolute path in new tab or a new split
+      if config.GetGlobalOption("filemanager.openontab") then
+        -- CurView():VSplitIndex(NewBufferFromFile(scanlist[y].abspath), 1)
+        local nfile = scanlist[y].abspath
+        local rpath = shell.RunCommand('realpath \'' .. nfile .. '\' --relative-to=\'' .. os.Getwd() .. '\'')
+        toggle_tree()
+        micro.CurPane():NewTabCmd({string.sub(rpath, 1, -2)})
+        --toggle_tree()
+      else
+        micro.CurPane():VSplitIndex(buffer.NewBufferFromFile(scanlist[y].abspath), true)
+      end
 			-- Resizes all views after opening a file
 			-- tabs[curTab + 1]:Resize()
 		end
@@ -849,12 +860,19 @@ local function open_tree()
     tree_view.Buf:SetOptionNative("scrollbar", false)
 
 	-- Fill the scanlist, and then print its contents to tree_view
-	update_current_dir(os.Getwd())
+  if 0 == #scanlist then
+  	update_current_dir(os.Getwd())
+  else
+    refresh_view()
+  end
+  tree_view.Cursor.Loc.Y = s_cursy
+  select_line(s_cursy)
 end
 
 -- close_tree will close the tree plugin view and release memory.
 local function close_tree()
 	if tree_view ~= nil then
+    s_cursy = tree_view.Cursor.Loc.Y
 		tree_view:Quit()
 		tree_view = nil
 		clear_messenger()
@@ -1154,10 +1172,16 @@ function preInsertTab(view)
 	end
 end
 function preInsertNewline(view)
-    if view == tree_view then
-        return false
+  if view == tree_view then
+    if config.GetGlobalOption("filemanager.openontab") then
+      -- Simulate the pressing Tab so it opens with Enter key
+      tab_pressed = true
+      try_open_at_y(tree_view.Cursor.Loc.Y)
+      tab_pressed = false
     end
-    return true
+    return false
+  end
+  return true
 end
 -- CtrlL
 function onJumpLine(view)
@@ -1352,6 +1376,9 @@ function init()
     -- Lets the user have the filetree auto-open any time Micro is opened
     -- false by default, as it's a rather noticable user-facing change
     config.RegisterCommonOption("filemanager", "openonstart", false)
+    -- Lets the user open file in new tab or in a new vsplit
+    -- false by default, as it's a rather noticable user-facing change
+    config.RegisterCommonOption("filemanager", "openontab", false)
 
     -- Open/close the tree view
     config.MakeCommand("tree", toggle_tree, config.NoComplete)
